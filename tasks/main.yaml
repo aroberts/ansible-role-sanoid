@@ -88,21 +88,33 @@
 
     - name: update known_hosts
       block:
-        - name: add destination to known_hosts
-          ansible.builtin.known_hosts:
-            name: "{{ item }}"
-            key: "{{ lookup('pipe', 'ssh-keyscan -t' + syncoid_ssh_key_type + ' ' + item ) }}"
-            path: "{{ syncoid_known_hosts }}"
-            state: present
-          loop: "{{ syncoid_syncs | flatten | selectattr('dest_host', 'defined') | map(attribute='dest_host') | list | unique }}"
+        - name: compile list of remote hosts
+          ansible.builtin.set_fact:
+            syncoid_remote_hosts: >-
+              {{
+                (syncoid_syncs | flatten | selectattr('dest_host', 'defined') | map(attribute='dest_host') | list) +
+                (syncoid_syncs | flatten | selectattr('src_host', 'defined') | map(attribute='src_host') | list)
+                | unique
+              }}
 
-        - name: add source to known_hosts
+        - name: check which hosts are in known_hosts
+          ansible.builtin.command:
+            cmd: "ssh-keygen -F {{ item }} -f {{ syncoid_known_hosts }}"
+          loop: "{{ syncoid_remote_hosts }}"
+          register: known_hosts_check
+          changed_when: false
+          failed_when: false
+
+        - name: add remote hosts to known_hosts
           ansible.builtin.known_hosts:
-            name: "{{ item }}"
-            key: "{{ lookup('pipe', 'ssh-keyscan -t' + syncoid_ssh_key_type + ' ' + item ) }}"
+            name: "{{ item.item }}"
+            key: "{{ lookup('pipe', 'ssh-keyscan -t' + syncoid_ssh_key_type + ' ' + item.item ) }}"
             path: "{{ syncoid_known_hosts }}"
             state: present
-          loop: "{{ syncoid_syncs | flatten | selectattr('src_host', 'defined') | map(attribute='src_host') | list | unique }}"
+          loop: "{{ known_hosts_check.results }}"
+          when: item.rc != 0
+          loop_control:
+            label: "{{ item.item }}"
       when: syncoid_update_known_hosts
 
     - name: install runitor
